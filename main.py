@@ -46,9 +46,12 @@ def load_data():
     # 결측치 제거
     df = df.dropna(subset=["평균기온"])
     
-    # 연도별 평균 기온 계산
-    yearly_df = df.groupby("연도")["평균기온"].agg(["mean", "min", "max"]).reset_index()
-    yearly_df.columns = ["연도", "연평균기온", "최저기온평균", "최고기온평균"]
+    # 연도별 관측 일수 및 평균 산출
+    yearly_df = df.groupby("연도")["평균기온"].agg(["mean", "min", "max", "count"]).reset_index()
+    yearly_df.columns = ["연도", "연평균기온", "최저기온평균", "최고기온평균", "일수"]
+    
+    # 관측 일수가 300일 이상인 정상 연도만 남김
+    yearly_df = yearly_df[yearly_df["일수"] >= 300].copy()
     yearly_df["연평균기온"] = yearly_df["연평균기온"].round(2)
     
     return df, yearly_df
@@ -80,8 +83,14 @@ try:
     # 선택 연도 데이터 필터링
     filtered_df = yearly_df[(yearly_df["연도"] >= year_range[0]) & (yearly_df["연도"] <= year_range[1])].copy()
     
-    # 10년 이동평균 계산
+    # 전체 연도 축을 생성하여 데이터 없는 연도(NaN)를 명시적으로 삽입
+    full_years = pd.DataFrame({"연도": range(filtered_df["연도"].min(), filtered_df["연도"].max() + 1)})
+    merged_df = pd.merge(full_years, filtered_df, on="연도", how="left")
+    
+    # 10년 이동평균 계산 (실제 유효 연도 기준)
     filtered_df["10년_이동평균"] = filtered_df["연평균기온"].rolling(window=10, min_periods=1).mean().round(2)
+    merged_df = pd.merge(merged_df.drop(columns=["10년_이동평균"], errors="ignore"), 
+                         filtered_df[["연도", "10년_이동평균"]], on="연도", how="left")
     
     # 주요 지표 (Metric)
     col1, col2, col3, col4 = st.columns(4)
@@ -90,7 +99,7 @@ try:
     min_row = filtered_df.loc[filtered_df["연평균기온"].idxmin()]
     avg_temp = filtered_df["연평균기온"].mean()
     
-    # 초기 10년 vs 최근 10년 기온 변화 폭
+    # 초기 10개 연도 vs 최근 10개 연도 기온 변화 폭
     if len(filtered_df) >= 10:
         start_avg = filtered_df.iloc[:10]["연평균기온"].mean()
         end_avg = filtered_df.iloc[-10:]["연평균기온"].mean()
@@ -109,29 +118,31 @@ try:
     # Plotly 시각화 그래프 생성
     fig = go.Figure()
     
-    # 연평균 기온 그래프
+    # 연평균 기온 그래프 (connectgaps=False로 데이터 없는 구간 끊어서 표시)
     fig.add_trace(go.Scatter(
-        x=filtered_df["연도"],
-        y=filtered_df["연평균기온"],
+        x=merged_df["연도"],
+        y=merged_df["연평균기온"],
         mode="lines+markers",
         name="연평균 기온",
         line=dict(color="#E63946", width=2),
         marker=dict(size=5),
+        connectgaps=False,  # 누락된 데이터 구간 자동 연결 차단
         hovertemplate="<b>%{x}년</b>: %{y}℃<extra></extra>"
     ))
     
     # 10년 이동평균선
     if show_ma:
         fig.add_trace(go.Scatter(
-            x=filtered_df["연도"],
-            y=filtered_df["10년_이동평균"],
+            x=merged_df["연도"],
+            y=merged_df["10년_이동평균"],
             mode="lines",
             name="10년 이동평균",
             line=dict(color="#457B9D", width=3, dash="dash"),
+            connectgaps=False,
             hovertemplate="<b>%{x}년 (10년 평균)</b>: %{y}℃<extra></extra>"
         ))
         
-    # 선형 추세선
+    # 선형 추세선 (관측된 실제 데이터 포인트 기반)
     if show_trend and len(filtered_df) > 1:
         z = np.polyfit(filtered_df["연도"], filtered_df["연평균기온"], 1)
         p = np.poly1d(z)
@@ -177,7 +188,7 @@ try:
     # 세부 데이터 표
     with st.expander("📊 연도별 기온 상세 데이터 보기"):
         st.dataframe(
-            filtered_df.style.format({
+            filtered_df[["연도", "연평균기온", "최저기온평균", "최고기온평균", "10년_이동평균"]].style.format({
                 "연평균기온": "{:.2f} ℃",
                 "최저기온평균": "{:.2f} ℃",
                 "최고기온평균": "{:.2f} ℃",
