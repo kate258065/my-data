@@ -15,7 +15,7 @@ st.set_page_config(
 def load_data():
     url = "https://raw.githubusercontent.com/greatsong/modudata/main/data/seoul.csv"
     
-    # 인코딩 자동 처리 (cp949 -> euc-kr -> utf-8)
+    # 인코딩 자동 처리
     try:
         df = pd.read_csv(url, encoding="cp949")
     except Exception:
@@ -40,11 +40,10 @@ def load_data():
             rename_dict[col] = "최고기온"
     df = df.rename(columns=rename_dict)
     
-    # 지점 컬럼이 없는 경우 기본값 처리
     if "지점" not in df.columns:
-        df["지점"] = 108  # 서울 지점 번호 기본값
+        df["지점"] = 108
     
-    # 날짜 데이터 변환 및 연도 추출
+    # 날짜 데이터 변환 및 숫자형 변환
     df["날짜"] = pd.to_datetime(df["날짜"])
     df["연도"] = df["날짜"].dt.year
     df["지점"] = pd.to_numeric(df["지점"], errors="coerce").fillna(108).astype(int)
@@ -52,10 +51,10 @@ def load_data():
     df["최저기온"] = pd.to_numeric(df["최저기온"], errors="coerce")
     df["최고기온"] = pd.to_numeric(df["최고기온"], errors="coerce")
     
-    # 결측치 제거 (일일 평균기온 기준)
+    # 결측치 제거
     df_clean = df.dropna(subset=["평균기온"]).copy()
     
-    # 연도별 관측 일수 및 평균 산출
+    # 연도별/지점별 관측 일수 및 평균 산출
     yearly_df = df_clean.groupby(["연도", "지점"]).agg(
         연평균기온=("평균기온", "mean"),
         최저기온평균=("최저기온", "mean"),
@@ -63,7 +62,7 @@ def load_data():
         일수=("평균기온", "count")
     ).reset_index()
     
-    # 관측 일수가 300일 이상인 정상 연도만 남김 (6.25 전쟁 등 누락 연도 분리)
+    # 관측 일수가 300일 이상인 정상 연도만 포함
     yearly_df = yearly_df[yearly_df["일수"] >= 300].copy()
     yearly_df["연평균기온"] = yearly_df["연평균기온"].round(2)
     yearly_df["최저기온평균"] = yearly_df["최저기온평균"].round(2)
@@ -95,24 +94,21 @@ try:
     show_ma = st.sidebar.checkbox("10년 이동평균선 표시", value=True)
     show_trend = st.sidebar.checkbox("선형 추세선 표시", value=True)
     
-    # 선택 연도 데이터 필터링
+    # 데이터 필터링
     filtered_yearly_df = yearly_df[(yearly_df["연도"] >= year_range[0]) & (yearly_df["연도"] <= year_range[1])].copy()
     filtered_daily_df = clean_df[(clean_df["연도"] >= year_range[0]) & (clean_df["연도"] <= year_range[1])].copy()
     
-    # 전체 연도 축을 생성하여 데이터 없는 연도(NaN)를 명시적으로 삽입
+    # 결측 연도 삽입용 전체 연도 축
     full_years = pd.DataFrame({"연도": range(filtered_yearly_df["연도"].min(), filtered_yearly_df["연도"].max() + 1)})
     merged_df = pd.merge(full_years, filtered_yearly_df, on="연도", how="left")
     
-    # 10년 이동평균 계산 (실제 유효 연도 기준)
+    # 10년 이동평균 계산
     filtered_yearly_df["10년_이동평균"] = filtered_yearly_df["연평균기온"].rolling(window=10, min_periods=1).mean().round(2)
     merged_df = pd.merge(merged_df.drop(columns=["10년_이동평균"], errors="ignore"), 
                          filtered_yearly_df[["연도", "10년_이동평균"]], on="연도", how="left")
     
-    # --- 이상치 및 결측 구간 식별 ---
-    # 1. 결측 연도 (관측 일수 300일 미만으로 필터링된 연도)
+    # 이상치 및 결측 구간 계산
     missing_years = full_years[~full_years["연도"].isin(filtered_yearly_df["연도"])]
-    
-    # 2. 유난히 낮은 연도 (전체 평균 대비 -1.5 표준편차 이하)
     overall_avg = filtered_yearly_df["연평균기온"].mean()
     overall_std = filtered_yearly_df["연평균기온"].std()
     low_temp_threshold = overall_avg - (overall_std * 1.5)
@@ -125,7 +121,6 @@ try:
     max_row = filtered_yearly_df.loc[filtered_yearly_df["연평균기온"].idxmax()]
     min_row = filtered_yearly_df.loc[filtered_yearly_df["연평균기온"].idxmin()]
     
-    # 초기 10개 연도 vs 최근 10개 연도 기온 변화 폭
     if len(filtered_yearly_df) >= 10:
         start_avg = filtered_yearly_df.iloc[:10]["연평균기온"].mean()
         end_avg = filtered_yearly_df.iloc[-10:]["연평균기온"].mean()
@@ -141,10 +136,9 @@ try:
     
     st.markdown("---")
     
-    # --- Plotly 시각화 그래프 생성 ---
+    # Plotly 시각화
     fig = go.Figure()
     
-    # A. 연평균 기온 그래프 (connectgaps=False로 데이터 없는 구간 끊어서 표시)
     fig.add_trace(go.Scatter(
         x=merged_df["연도"],
         y=merged_df["연평균기온"],
@@ -152,11 +146,10 @@ try:
         name="연평균 기온",
         line=dict(color="#E63946", width=2),
         marker=dict(size=5),
-        connectgaps=False,  # 누락된 데이터 구간 자동 연결 차단
+        connectgaps=False,
         hovertemplate="<b>%{x}년</b>: %{y}℃<extra></extra>"
     ))
     
-    # B. 10년 이동평균선
     if show_ma:
         fig.add_trace(go.Scatter(
             x=merged_df["연도"],
@@ -168,7 +161,6 @@ try:
             hovertemplate="<b>%{x}년 (10년 평균)</b>: %{y}℃<extra></extra>"
         ))
         
-    # C. 선형 추세선 (관측된 실제 데이터 포인트 기반)
     if show_trend and len(filtered_yearly_df) > 1:
         z = np.polyfit(filtered_yearly_df["연도"], filtered_yearly_df["연평균기온"], 1)
         p = np.poly1d(z)
@@ -181,9 +173,7 @@ try:
             hovertemplate="<b>%{x}년 추세값</b>: %{y:.2f}℃<extra></extra>"
         ))
 
-    # --- 이상 구간 및 이상치 눈에 띄게 표시 ---
-    
-    # 1. 결측 연도 (회색 세로 영역)
+    # 결측 연도 회색 영역 표시
     for year in missing_years["연도"]:
         fig.add_vrect(
             x0=year - 0.5, x1=year + 0.5,
@@ -194,7 +184,6 @@ try:
             annotation_font=dict(color="#7F8C8D", size=10)
         )
     
-    # 범례용 가짜 데이터 (결측 구간)
     if not missing_years.empty:
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
@@ -204,7 +193,7 @@ try:
             showlegend=True
         ))
 
-    # 2. 유난히 낮은 연도 (노란색 다이아몬드 테두리)
+    # 유난히 낮은 기온 연도 강조
     if not outlier_low_years.empty:
         fig.add_trace(go.Scatter(
             x=outlier_low_years["연도"],
@@ -220,47 +209,30 @@ try:
             hovertemplate="<b>%{x}년 (이상저온)</b>: %{y}℃<extra></extra>"
         ))
 
-    # 레이아웃 스타일링
     fig.update_layout(
         title=dict(
             text=f"<b>서울 연평균 기온 변화 추이 및 특이 구간 ({year_range[0]}년 ~ {year_range[1]}년)</b>",
             font=dict(size=20)
         ),
-        xaxis=dict(
-            title="연도 (Year)",
-            showgrid=True,
-            dtick=10 if (year_range[1] - year_range[0]) > 30 else 5
-        ),
-        yaxis=dict(
-            title="평균 기온 (℃)",
-            showgrid=True
-        ),
+        xaxis=dict(title="연도 (Year)", showgrid=True, dtick=10 if (year_range[1] - year_range[0]) > 30 else 5),
+        yaxis=dict(title="평균 기온 (℃)", showgrid=True),
         hovermode="x unified",
         template="plotly_white",
         height=580,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     
-    # 차트 출력
     st.plotly_chart(fig, use_container_width=True)
     
     st.markdown("---")
     
-    # 원본 데이터 요약통계 섹션 (지표: 지점, 평균기온, 최저기온, 최고기온 모두 포함)
+    # 지점, 평균기온, 최저기온, 최고기온 요약통계
     st.subheader("📋 원본 관측 데이터 요약통계")
-    st.caption(f"선택된 조회 기간({year_range[0]}년 ~ {year_range[1]}년) 내 일별 관측 데이터의 지점별 기초 통계량입니다.")
+    st.caption(f"선택된 조회 기간({year_range[0]}년 ~ {year_range[1]}년) 내 일별 관측 데이터의 항목별 기초 통계량입니다.")
     
-    # 요약통계 계산
     temp_cols = ["지점", "평균기온", "최저기온", "최고기온"]
     stats_df = filtered_daily_df[temp_cols].describe().T
     
-    # 통계표 한국어 컬럼명 변경
     stats_df = stats_df.rename(columns={
         "count": "관측 개수(일)",
         "mean": "평균",
@@ -272,7 +244,6 @@ try:
         "max": "최대값"
     })
     
-    # 숫자 포맷 지정 출력
     st.dataframe(
         stats_df.style.format({
             "관측 개수(일)": "{:,.0f}",
@@ -287,9 +258,8 @@ try:
         use_container_width=True
     )
     
-    # 연도별 상세 집계 데이터 (지점, 평균기온, 최저기온, 최고기온 모두 표시)
+    # 지점이 포함된 연도별 상세 집계 표
     with st.expander("📊 연도별 집계 데이터 상세 보기"):
-        # 표에서도 이상치 강조
         def highlight_outliers(s):
             is_low = s.name == "연평균기온" and s <= low_temp_threshold
             return ['background-color: #FEF9E7' if v else '' for v in is_low]
