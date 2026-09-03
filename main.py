@@ -1,4 +1,4 @@
-import streamlit as st
+main_py_v3 = '''import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
@@ -42,27 +42,29 @@ def load_data():
     df["날짜"] = pd.to_datetime(df["날짜"])
     df["연도"] = df["날짜"].dt.year
     df["평균기온"] = pd.to_numeric(df["평균기온"], errors="coerce")
+    df["최저기온"] = pd.to_numeric(df["최저기온"], errors="coerce")
+    df["최고기온"] = pd.to_numeric(df["최고기온"], errors="coerce")
     
-    # 결측치 제거
-    df = df.dropna(subset=["평균기온"])
+    # 결측치 제거 (일일 평균기온 기준)
+    df_clean = df.dropna(subset=["평균기온"]).copy()
     
     # 연도별 관측 일수 및 평균 산출
-    yearly_df = df.groupby("연도")["평균기온"].agg(["mean", "min", "max", "count"]).reset_index()
+    yearly_df = df_clean.groupby("연도")["평균기온"].agg(["mean", "min", "max", "count"]).reset_index()
     yearly_df.columns = ["연도", "연평균기온", "최저기온평균", "최고기온평균", "일수"]
     
-    # 관측 일수가 300일 이상인 정상 연도만 남김
+    # 관측 일수가 300일 이상인 정상 연도만 남김 (6.25 전쟁 등 누락 연도 분리)
     yearly_df = yearly_df[yearly_df["일수"] >= 300].copy()
     yearly_df["연평균기온"] = yearly_df["연평균기온"].round(2)
     
-    return df, yearly_df
+    return df, df_clean, yearly_df
 
 # 메인 화면 타이틀
 st.title("🌡️ 서울 100년 기온 변화 분석")
-st.markdown("지난 100여 년간 서울의 연평균 기온 변화 추이를 인터랙티브 그래프로 확인합니다.")
+st.markdown("지난 100여 년간 서울의 연평균 기온 변화 추이와 원본 데이터의 데이터 특성을 요약통계로 분석합니다.")
 
 try:
     with st.spinner("데이터를 불러오는 중입니다..."):
-        raw_df, yearly_df = load_data()
+        raw_df, clean_df, yearly_df = load_data()
 
     # 사이드바 설정
     st.sidebar.header("⚙️ 분석 설정")
@@ -81,28 +83,29 @@ try:
     show_trend = st.sidebar.checkbox("선형 추세선 표시", value=True)
     
     # 선택 연도 데이터 필터링
-    filtered_df = yearly_df[(yearly_df["연도"] >= year_range[0]) & (yearly_df["연도"] <= year_range[1])].copy()
+    filtered_yearly_df = yearly_df[(yearly_df["연도"] >= year_range[0]) & (yearly_df["연도"] <= year_range[1])].copy()
+    filtered_daily_df = clean_df[(clean_df["연도"] >= year_range[0]) & (clean_df["연도"] <= year_range[1])].copy()
     
     # 전체 연도 축을 생성하여 데이터 없는 연도(NaN)를 명시적으로 삽입
-    full_years = pd.DataFrame({"연도": range(filtered_df["연도"].min(), filtered_df["연도"].max() + 1)})
-    merged_df = pd.merge(full_years, filtered_df, on="연도", how="left")
+    full_years = pd.DataFrame({"연도": range(filtered_yearly_df["연도"].min(), filtered_yearly_df["연도"].max() + 1)})
+    merged_df = pd.merge(full_years, filtered_yearly_df, on="연도", how="left")
     
     # 10년 이동평균 계산 (실제 유효 연도 기준)
-    filtered_df["10년_이동평균"] = filtered_df["연평균기온"].rolling(window=10, min_periods=1).mean().round(2)
+    filtered_yearly_df["10년_이동평균"] = filtered_yearly_df["연평균기온"].rolling(window=10, min_periods=1).mean().round(2)
     merged_df = pd.merge(merged_df.drop(columns=["10년_이동평균"], errors="ignore"), 
-                         filtered_df[["연도", "10년_이동평균"]], on="연도", how="left")
+                         filtered_yearly_df[["연도", "10년_이동평균"]], on="연도", how="left")
     
     # 주요 지표 (Metric)
     col1, col2, col3, col4 = st.columns(4)
     
-    max_row = filtered_df.loc[filtered_df["연평균기온"].idxmax()]
-    min_row = filtered_df.loc[filtered_df["연평균기온"].idxmin()]
-    avg_temp = filtered_df["연평균기온"].mean()
+    max_row = filtered_yearly_df.loc[filtered_yearly_df["연평균기온"].idxmax()]
+    min_row = filtered_yearly_df.loc[filtered_yearly_df["연평균기온"].idxmin()]
+    avg_temp = filtered_yearly_df["연평균기온"].mean()
     
     # 초기 10개 연도 vs 최근 10개 연도 기온 변화 폭
-    if len(filtered_df) >= 10:
-        start_avg = filtered_df.iloc[:10]["연평균기온"].mean()
-        end_avg = filtered_df.iloc[-10:]["연평균기온"].mean()
+    if len(filtered_yearly_df) >= 10:
+        start_avg = filtered_yearly_df.iloc[:10]["연평균기온"].mean()
+        end_avg = filtered_yearly_df.iloc[-10:]["연평균기온"].mean()
         temp_change = round(end_avg - start_avg, 2)
         change_text = f"{temp_change:+.2f} ℃"
     else:
@@ -143,12 +146,12 @@ try:
         ))
         
     # 선형 추세선 (관측된 실제 데이터 포인트 기반)
-    if show_trend and len(filtered_df) > 1:
-        z = np.polyfit(filtered_df["연도"], filtered_df["연평균기온"], 1)
+    if show_trend and len(filtered_yearly_df) > 1:
+        z = np.polyfit(filtered_yearly_df["연도"], filtered_yearly_df["연평균기온"], 1)
         p = np.poly1d(z)
         fig.add_trace(go.Scatter(
-            x=filtered_df["연도"],
-            y=p(filtered_df["연도"]),
+            x=filtered_yearly_df["연도"],
+            y=p(filtered_yearly_df["연도"]),
             mode="lines",
             name="선형 추세선",
             line=dict(color="#1D3557", width=2, dash="dot"),
@@ -185,10 +188,47 @@ try:
     # 차트 출력
     st.plotly_chart(fig, use_container_width=True)
     
-    # 세부 데이터 표
-    with st.expander("📊 연도별 기온 상세 데이터 보기"):
+    st.markdown("---")
+    
+    # 원본 데이터 요약통계 섹션 추가
+    st.subheader("📋 원본 관측 데이터 요약통계")
+    st.caption(f"선택된 조회 기간({year_range[0]}년 ~ {year_range[1]}년) 내 일별 관측 데이터의 기초 통계량입니다.")
+    
+    # 요약통계 계산
+    temp_cols = ["평균기온", "최저기온", "최고기온"]
+    stats_df = filtered_daily_df[temp_cols].describe().T
+    
+    # 통계표 한국어 컬럼명 변경
+    stats_df = stats_df.rename(columns={
+        "count": "관측 개수(일)",
+        "mean": "평균 (℃)",
+        "std": "표준편차",
+        "min": "최소값 (℃)",
+        "25%": "1사분위 (25%)",
+        "50%": "중앙값 (50%)",
+        "75%": "3사분위 (75%)",
+        "max": "최대값 (℃)"
+    })
+    
+    # 숫자 포맷 지정
+    st.dataframe(
+        stats_df.style.format({
+            "관측 개수(일)": "{:,.0f}",
+            "평균 (℃)": "{:.2f}",
+            "표준편차": "{:.2f}",
+            "최소값 (℃)": "{:.1f}",
+            "1사분위 (25%)": "{:.1f}",
+            "중앙값 (50%)": "{:.1f}",
+            "3사분위 (75%)": "{:.1f}",
+            "최대값 (℃)": "{:.1f}"
+        }),
+        use_container_width=True
+    )
+    
+    # 연도별 세부 데이터
+    with st.expander("📊 연도별 집계 데이터 상세 보기"):
         st.dataframe(
-            filtered_df[["연도", "연평균기온", "최저기온평균", "최고기온평균", "10년_이동평균"]].style.format({
+            filtered_yearly_df[["연도", "연평균기온", "최저기온평균", "최고기온평균", "10년_이동평균"]].style.format({
                 "연평균기온": "{:.2f} ℃",
                 "최저기온평균": "{:.2f} ℃",
                 "최고기온평균": "{:.2f} ℃",
@@ -199,3 +239,9 @@ try:
 
 except Exception as e:
     st.error(f"데이터를 불러오거나 처리하는 중 오류가 발생했습니다: {e}")
+'''
+
+with open("main.py", "w", encoding="utf-8") as f:
+    f.write(main_py_v3)
+
+print("Updated main.py with summary statistics successfully written.")
